@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>伊豆箱根 5天4夜自駕遊</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Vue 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+    
+    <style>
+        body { font-family: 'Noto Sans TC', sans-serif; -webkit-tap-highlight-color: transparent; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        /* 手機版佈局設定 */
+        @media (max-width: 768px) {
+            #app { flex-direction: column; }
+            /* 地圖在上方，高度佔 35vh */
+            .map-section { height: 35vh !important; order: 1; }
+            /* 行程表在下方，高度佔 65vh */
+            .list-section { height: 65vh !important; order: 2; border-radius: 20px 20px 0 0; margin-top: -15px; z-index: 10; position: relative; box-shadow: 0 -4px 10px rgba(0,0,0,0.1); }
+            /* 底部緩衝區，防止被遮擋 */
+            .events-container { padding-bottom: 150px !important; }
+        }
+
+        /* 電腦版佈局設定 */
+        @media (min-width: 769px) {
+            #app { flex-direction: row; }
+            .map-section { height: 100vh !important; width: 60%; order: 2; }
+            .list-section { height: 100vh !important; width: 40%; max-width: 450px; order: 1; z-index: 10; }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 h-screen overflow-hidden">
+
+    <div id="app" class="flex w-full h-full relative">
+        
+        <!-- 左側 (手機為下側)：行程列表 -->
+        <div class="list-section bg-white shadow-xl flex flex-col w-full h-full">
+            <!-- Header -->
+            <div class="bg-blue-600 text-white p-3 shrink-0 flex justify-between items-center shadow-md z-20 rounded-t-[20px] md:rounded-none">
+                <div>
+                    <h1 class="text-lg font-bold">🇯🇵 伊豆箱根自駕</h1>
+                    <p class="text-xs opacity-90">2026/01/31 - 02/04</p>
+                </div>
+                <div class="bg-blue-700 px-2 py-1 rounded text-sm font-bold">Day {{ currentDay + 1 }}</div>
+            </div>
+
+            <!-- Tabs -->
+            <div class="flex overflow-x-auto bg-gray-50 border-b shrink-0 scrollbar-hide z-20">
+                <button 
+                    v-for="(day, index) in itinerary" 
+                    :key="index"
+                    @click="currentDay = index"
+                    :class="['px-4 py-3 whitespace-nowrap text-xs font-bold transition-colors', 
+                             currentDay === index ? 'text-blue-600 border-b-2 border-blue-600 bg-white' : 'text-gray-500 hover:bg-gray-100']">
+                    {{ day.shortTitle || day.title.split(' ')[0] + ' ' + day.title.split(' ')[1] }}
+                </button>
+            </div>
+
+            <!-- 重點提示 -->
+            <div class="p-3 bg-amber-50 border-b border-amber-100 shrink-0 text-xs text-amber-900 leading-relaxed flex gap-2">
+                <span class="text-lg">💡</span>
+                <span>{{ itinerary[currentDay].summary }}</span>
+            </div>
+
+            <!-- Timeline Content (增加 padding-bottom) -->
+            <div class="events-container flex-1 overflow-y-auto p-4 space-y-6 bg-white">
+                <div v-for="(item, idx) in itinerary[currentDay].events" :key="idx" 
+                     class="relative pl-5 border-l-2 border-gray-100">
+                    
+                    <!-- 圓點 -->
+                    <div :class="['absolute -left-[7px] top-1 w-3.5 h-3.5 rounded-full border-2 bg-white', item.highlight ? 'border-red-500 shadow-sm' : 'border-blue-500']"></div>
+                    
+                    <div class="mb-1 flex items-baseline gap-2">
+                        <span :class="['font-bold font-mono text-base', item.highlight ? 'text-red-600' : 'text-blue-700']">{{ item.time }}</span>
+                        <span v-if="item.tag" class="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 font-bold">{{ item.tag }}</span>
+                    </div>
+                    
+                    <h3 class="font-bold text-gray-800 text-base leading-tight">{{ item.location }}</h3>
+                    <p v-if="item.desc" class="text-sm text-gray-500 mt-1 leading-relaxed">{{ item.desc }}</p>
+                    <p v-if="item.warning" class="text-xs text-red-500 mt-1 font-bold bg-red-50 p-1 rounded inline-block">⚠️ {{ item.warning }}</p>
+                    
+                    <!-- 按鈕群組 -->
+                    <div class="mt-3 flex gap-2">
+                        <!-- 地圖按鈕 (同時支援點擊跳轉App與地圖聚焦) -->
+                        <button v-if="item.coords" 
+                                @click="handleMapClick(item.coords, item.location)" 
+                                class="flex-1 bg-blue-50 text-blue-700 border border-blue-100 py-2 rounded-lg text-xs font-bold active:bg-blue-100 transition shadow-sm flex justify-center items-center gap-1">
+                            📍 導航/地圖
+                        </button>
+                        
+                        <a v-if="item.searchLink" :href="item.searchLink" target="_blank" 
+                           class="flex-1 bg-white text-gray-600 border border-gray-200 py-2 rounded-lg text-xs font-bold active:bg-gray-50 transition shadow-sm flex justify-center items-center gap-1">
+                           🔍 Google
+                        </a>
+
+                        <a v-if="item.officialLink" :href="item.officialLink" target="_blank" 
+                           class="flex-1 bg-amber-50 text-amber-700 border border-amber-200 py-2 rounded-lg text-xs font-bold active:bg-amber-100 transition shadow-sm flex justify-center items-center gap-1">
+                           🏨 官網
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右側 (手機為上側)：地圖 -->
+        <div class="map-section w-full relative bg-gray-200">
+            <div id="map" class="w-full h-full outline-none"></div>
+            <!-- 地圖覆蓋控制項 -->
+            <div class="absolute bottom-2 right-2 z-[400] bg-white/80 px-1 text-[10px] text-gray-500 rounded pointer-events-none">
+                 © OSM
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        const { createApp, ref, onMounted, watch } = Vue;
+
+        createApp({
+            setup() {
+                const currentDay = ref(0);
+                let map = null;
+                let markers = [];
+
+                // 行程資料庫 (完整資料)
+                const itinerary = ref([
+                    {
+                        title: "Day 1 (1/31)",
+                        shortTitle: "D1 機場/熱海",
+                        summary: "趕路吃海鮮，入住熱海。海老名SA只買麵包不吃正餐。",
+                        events: [
+                            { time: "15:55", location: "成田機場 (NRT)", tag: "抵達", desc: "快速通關、領行李、取車 (設定ETC/導航)。", coords: [35.7719, 140.3929] },
+                            { time: "18:30", location: "海老名 SA", tag: "休息", highlight: true, warning: "只買麵包，趕路要緊", desc: "只上廁所 + 買哈密瓜麵包墊胃。", coords: [35.4549, 139.3888] },
+                            { time: "20:00", location: "伊豆太郎 (熱海 Lasca 3F)", tag: "晚餐首選", desc: "不用排隊直接進去吃海鮮丼/壽司。", searchLink: "https://www.google.com/search?q=伊豆太郎+ラスカ熱海", coords: [35.1036, 139.0777] },
+                            { time: "20:00", location: "Leone 9", tag: "晚餐次選", desc: "氣氛佳，前提是已訂位。", searchLink: "https://www.google.com/search?q=Leone+9+Atami", coords: [35.0990, 139.0730] },
+                            { time: "21:45", location: "熱海温泉 実の別荘", tag: "住宿", desc: "Check-in。記得提前告知晚到。", officialLink: "https://www.booking.com/hotel/jp/re-hai-wen-quan-shi-nobie-zhuang.ja.html", coords: [35.1042, 139.0655] }
+                        ]
+                    },
+                    {
+                        title: "Day 2 (2/1)",
+                        shortTitle: "D2 熱海/伊豆",
+                        summary: "上午梅園，下午大室山纜車(16:00末班)。晚上住赤澤。",
+                        events: [
+                            { time: "10:10", location: "來宮神社", tag: "景點", desc: "繞大楠神木一圈延壽。", searchLink: "https://www.google.com/search?q=來宮神社+熱海", coords: [35.0997, 139.0664] },
+                            { time: "10:50", location: "熱海梅園", tag: "景點", desc: "梅花祭，園內 472 棵梅樹。", coords: [35.0945, 139.0635] },
+                            { time: "11:40", location: "Panju Kuon", tag: "點心", desc: "必買核桃麵包車上吃。", searchLink: "https://www.google.com/search?q=パン樹+久遠+熱海", coords: [35.098, 139.072] },
+                            { time: "12:05", location: "熱海城 (外觀)", tag: "打卡", desc: "不進城，門口拍全景。", coords: [35.0854, 139.0782] },
+                            { time: "13:20", location: "回転寿司 魚磯", tag: "午餐", desc: "伊豆高原店。必點金目鯛。", searchLink: "https://www.google.com/search?q=回転寿司+魚磯+伊豆高原", coords: [34.908, 139.105] },
+                            { time: "15:00", location: "大室山 (纜車)", tag: "重點", highlight: true, warning: "16:00 末班車", desc: "山頂繞火山口步道。", searchLink: "https://www.google.com/search?q=大室山", coords: [34.9026, 139.0961] },
+                            { time: "16:30", location: "城崎海岸", tag: "景點", desc: "門脇吊橋看夕陽。", coords: [34.8878, 139.1368] },
+                            { time: "17:40", location: "本家 鮪屋", tag: "晚餐", desc: "金目鯛煮付定食。", searchLink: "https://www.google.com/search?q=本家+鮪屋+伊豆高原", coords: [34.8817, 139.1065] },
+                            { time: "19:15", location: "赤澤溫泉飯店", tag: "住宿", desc: "必去 DHC 赤澤日歸溫泉館。", officialLink: "https://www.izuakazawa.jp/stay/onsen-hotel/", coords: [34.8569, 139.0936] }
+                        ]
+                    },
+                    {
+                        title: "Day 3 (2/2)",
+                        shortTitle: "D3 河津/箱根",
+                        summary: "河津櫻 & 箱根絕景。走伊豆 Skyline 避開塞車。",
+                        events: [
+                            { time: "10:00", location: "河津櫻", tag: "賞櫻", desc: "河邊散步、吃攤販小吃。", searchLink: "https://www.google.com/search?q=河津桜まつり", coords: [34.7476, 138.9972] },
+                            { time: "11:30", location: "伊豆 Skyline", tag: "車遊", desc: "看海看富士山，直奔大涌谷。", coords: [34.9926, 139.0286] },
+                            { time: "13:00", location: "大涌谷", tag: "景點", desc: "吃黑蛋延壽。", coords: [35.2425, 139.0195] },
+                            { time: "15:20", location: "箱根海賊船", tag: "體驗", desc: "桃源台港 -> 元箱根港。", searchLink: "https://www.google.com/search?q=箱根海賊船+時刻表", coords: [35.2384, 138.9942] },
+                            { time: "16:00", location: "箱根神社", tag: "打卡", desc: "平和鳥居。", coords: [35.2046, 139.0252] },
+                            { time: "17:30", location: "箱根湯之花王子", tag: "住宿", desc: "露天溫泉。", officialLink: "https://www.princehotels.co.jp/yunohana/", coords: [35.2158, 139.0411] }
+                        ]
+                    },
+                    {
+                        title: "Day 4 (2/3)",
+                        shortTitle: "D4 美術館/東京",
+                        summary: "美術館文藝之旅 & 返回東京。晚餐惠比壽。",
+                        events: [
+                            { time: "10:00", location: "雕刻之森美術館", tag: "文藝", desc: "畢卡索館、戶外足湯。", searchLink: "https://www.hakone-oam.or.jp/", coords: [35.2447, 139.0514] },
+                            { time: "12:30", location: "田むら銀かつ亭", tag: "午餐", desc: "強羅豆腐豬排名店。", searchLink: "https://www.google.com/search?q=田むら銀かつ亭", coords: [35.2505, 139.0483] },
+                            { time: "13:45", location: "返回東京", tag: "移動", desc: "順利可去代官山蔦屋。", coords: [35.6480, 139.7020] },
+                            { time: "17:00", location: "恵比寿 鮨 はつめ", tag: "晚餐", desc: "準時享用美食。", searchLink: "https://www.google.com/search?q=恵比寿+鮨+はつめ", coords: [35.6467, 139.7101] }
+                        ]
+                    },
+                    {
+                        title: "Day 5 (2/4)",
+                        shortTitle: "D5 鰻魚飯/機場",
+                        summary: "頂級鰻魚飯 & 機場送別。完美收尾。",
+                        events: [
+                            { time: "11:00", location: "うな富士 有楽町", tag: "午餐", desc: "名古屋流鰻魚飯。", searchLink: "https://www.google.com/search?q=炭焼+うな富士+有楽町店", coords: [35.6738, 139.7594] },
+                            { time: "12:30", location: "前往成田機場", tag: "移動", desc: "經首都高/東關東道。", coords: [35.7000, 139.9000] },
+                            { time: "13:45", location: "成田機場 (送機)", tag: "送別", desc: "T2/T1。", coords: [35.7719, 140.3929] },
+                            { time: "14:30", location: "還車 & Check-in", tag: "結束", desc: "16:55 航班組。", coords: [35.7750, 140.3850] }
+                        ]
+                    }
+                ]);
+
+                // 初始化地圖 (使用 cartocdn 確保穩定)
+                const initMap = () => {
+                    map = L.map('map', {zoomControl: false}).setView([35.1036, 139.0777], 10);
+                    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+                        attribution: '&copy; OSM & Carto',
+                        maxZoom: 19
+                    }).addTo(map);
+                    updateMarkers(0);
+                };
+
+                // 更新地圖標記
+                const updateMarkers = (dayIndex) => {
+                    if (!map) return;
+                    // 清除舊標記
+                    markers.forEach(m => map.removeLayer(m));
+                    markers = [];
+                    
+                    const events = itinerary.value[dayIndex].events;
+                    const bounds = [];
+
+                    events.forEach((event, i) => {
+                        if (event.coords) {
+                            // 自訂標記樣式
+                            const color = event.highlight ? '#EF4444' : '#2563EB';
+                            const icon = L.divIcon({
+                                className: '',
+                                html: `<div style="background-color:${color};color:white;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:bold;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)">${i+1}</div>`,
+                                iconSize: [24, 24]
+                            });
+
+                            const marker = L.marker(event.coords, {icon: icon}).addTo(map)
+                                .bindPopup(`<div style="text-align:center"><b>${event.location}</b><br><span style="font-size:0.8em">${event.time}</span></div>`);
+                            markers.push(marker);
+                            bounds.push(event.coords);
+                        }
+                    });
+
+                    if (bounds.length > 0) {
+                        map.fitBounds(bounds, { padding: [50, 50] });
+                    }
+                };
+
+                // 處理地圖按鈕點擊 (如果是手機，嘗試開啟 Google Maps App；如果是電腦或嵌入，移動地圖)
+                const handleMapClick = (coords, location) => {
+                    // 1. 先在地圖上聚焦
+                    if(map) {
+                        map.setView(coords, 14);
+                        L.popup().setLatLng(coords).setContent(`<b>${location}</b>`).openOn(map);
+                    }
+                    
+                    // 2. 如果是手機尺寸，也可以考慮直接開 App (這裡做成雙重功能：聚焦 + 準備導航連結)
+                    // 這裡的邏輯是：使用者點擊後，視圖會移動。如果他們真的要導航，可以長按或再次點擊
+                    // 為了簡化，我們先只做視圖移動。如果需要外連，可以再加。
+                };
+
+                watch(currentDay, (newDay) => {
+                    updateMarkers(newDay);
+                    // 切換天數時，列表捲回頂部
+                    const container = document.querySelector('.events-container');
+                    if(container) container.scrollTop = 0;
+                });
+
+                onMounted(() => {
+                    // 延遲載入地圖以避免容器大小尚未確定的問題
+                    setTimeout(initMap, 100);
+                });
+
+                return {
+                    currentDay,
+                    itinerary,
+                    handleMapClick
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
